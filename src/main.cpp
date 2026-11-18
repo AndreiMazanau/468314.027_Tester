@@ -35,6 +35,7 @@ int main() {
     ImPlot::CreateContext();
 
     ImGuiIO& io = ImGui::GetIO();
+    io.IniFilename = nullptr;   // Отключаем сохранение настроек в imgui.ini
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
     // Подгружаем системный шрифт с поддержкой кириллицы

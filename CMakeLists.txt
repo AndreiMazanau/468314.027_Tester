@@ -60,11 +60,30 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 target_link_libraries(${PROJECT_NAME} PRIVATE glfw OpenGL::GL)
 
 if(WIN32)
+    set_target_properties(${PROJECT_NAME} PROPERTIES
+        WIN32_EXECUTABLE TRUE
+    )
     target_link_libraries(${PROJECT_NAME} PRIVATE setupapi)
-    # Статическая линковка рантайма MinGW для получения единого .exe без внешних DLL
+    # Статическая линковка рантаймов GCC/C++/winpthread для единого .exe без внешних DLL
     if(MINGW)
-        target_link_options(${PROJECT_NAME} PRIVATE -static -static-libgcc -static-libstdc++)
+        target_link_options(${PROJECT_NAME} PRIVATE
+            -static-libgcc
+            -static-libstdc++
+            -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic
+        )
     endif()
 elseif(APPLE)
-    target_link_libraries(${PROJECT_NAME} PRIVATE "-framework Cocoa" "-framework IOKit" "-framework CoreVideo")
+    set_target_properties(${PROJECT_NAME} PROPERTIES
+        MACOSX_BUNDLE TRUE
+        MACOSX_BUNDLE_BUNDLE_NAME "BPO-GNS Tester"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "com.local.bpognstester"
+        MACOSX_BUNDLE_BUNDLE_VERSION "1.0.0"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0"
+    )
+    target_compile_definitions(${PROJECT_NAME} PRIVATE GL_SILENCE_DEPRECATION)
+    target_link_libraries(${PROJECT_NAME} PRIVATE
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework CoreVideo"
+    )
 endif()
