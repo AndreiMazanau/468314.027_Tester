@@ -147,12 +147,15 @@ bool SerialPort::IsOpen() const {
 
 bool SerialPort::WriteLine(const std::string& line) {
     if (!IsOpen()) return false;
+    rx_buffer_.clear(); // Сбрасываем возможный хвост от таймаута предыдущей команды
     std::string data = line + "\r\n";
 #ifdef _WIN32
     DWORD written = 0;
+    PurgeComm(static_cast<HANDLE>(handle_), PURGE_RXCLEAR);
     return WriteFile(static_cast<HANDLE>(handle_), data.data(), static_cast<DWORD>(data.size()), &written, nullptr) && written == data.size();
 #else
     ssize_t res = write(fd_, data.data(), data.size());
+    tcflush(fd_, TCIFLUSH);
     return res == static_cast<ssize_t>(data.size());
 #endif
 }

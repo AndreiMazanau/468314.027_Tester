@@ -87,6 +87,17 @@ void BpoClient::SetUiBrightness(uint8_t pct) {
     SendCommand(buf);
 }
 
+void BpoClient::SetKeyBacklight(uint8_t pct) {
+    if (pct > 100) pct = 100;
+    {
+        std::lock_guard<std::mutex> lk(data_mutex);
+        telemetry_.ui_light_pct = pct;
+    }
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "SET_UI LIGHT %u", pct);
+    SendCommand(buf);
+}
+
 void BpoClient::SetValveOutput(int ch_1_to_4, uint8_t pct) {
     if (ch_1_to_4 < 1 || ch_1_to_4 > 4) return;
     if (pct > 100) pct = 100;
@@ -123,8 +134,26 @@ void BpoClient::AppendLog(const std::string& line) {
 void BpoClient::WorkerLoop() {
     int poll_step = 0;
     const char* poll_cmds[3] = {"GET_IN", "GET_PWM", "GET_ADC"};
+    int consecutive_errors = 0;
 
     while (running_.load()) {
+        // Если связь «поплыла» (2 таймаута или ошибки подряд) — делаем паузу 150 мс и сбрасываем линию через PING
+        if (consecutive_errors >= 2) {
+            AppendLog("! Пересинхронизация UART...");
+            std::this_thread::sleep_for(std::chrono::milliseconds(150));
+            serial_.WriteLine(""); // Пустой перевод строки для сброса недописанного буфера в STM32
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+            std::string pong;
+            if (serial_.WriteLine("PING") && serial_.ReadLine(pong, 200) && pong == "OK PONG") {
+                AppendLog("< " + pong + " (связь восстановлена)");
+                consecutive_errors = 0;
+            } else {
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                continue;
+            }
+        }
+
         std::string cmd;
         bool is_user_cmd = false;
         {
@@ -143,17 +172,42 @@ void BpoClient::WorkerLoop() {
 
         if (is_user_cmd) AppendLog("> " + cmd);
 
-        if (serial_.WriteLine(cmd)) {
-            std::string resp;
-            if (serial_.ReadLine(resp, 60)) {
-                if (is_user_cmd || resp.rfind("ERR", 0) == 0) {
-                    AppendLog("< " + resp);
-                }
-                ParseResponse(cmd, resp);
-            }
+        if (!serial_.WriteLine(cmd)) {
+            consecutive_errors++;
+            AppendLog("< [WRITE ERROR]");
+            continue;
         }
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(is_user_cmd ? 5 : 20));
+        std::string resp;
+        // Читаем строки до тех пор, пока не получим релевантный ответ или не выйдет таймаут
+        bool got_valid = false;
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
+
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (!serial_.ReadLine(resp, 80)) break;
+            if (resp.empty()) continue;
+
+            // Игнорируем возможный запоздалый хвост от предыдущего опроса, если ждем ответ на команду оператора
+            if (is_user_cmd && (resp.rfind("OK IN=", 0) == 0 || resp.rfind("OK PWM=", 0) == 0 || resp.rfind("OK ADC=", 0) == 0)) {
+                continue;
+            }
+
+            if (is_user_cmd || resp.rfind("ERR", 0) == 0) {
+                AppendLog("< " + resp);
+            }
+            ParseResponse(cmd, resp);
+            got_valid = true;
+            break;
+        }
+
+        if (got_valid) {
+            consecutive_errors = 0;
+        } else {
+            consecutive_errors++;
+            AppendLog("< [TIMEOUT: " + cmd + "]");
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(is_user_cmd ? 15 : 80));
     }
 }
 
@@ -169,10 +223,12 @@ void BpoClient::ParseResponse(const std::string& cmd, const std::string& resp) {
         telemetry_.ui_cols.fill(0x00);
         telemetry_.ui_brightness = 100;
         telemetry_.out_pwm.fill(0);
+        telemetry_.ui_light_pct = 0;
     }
     else if (resp == "OK MODE=0") {
         telemetry_.test_mode = false;
         telemetry_.out_pwm.fill(0);
+        telemetry_.ui_light_pct = 0;
     }
     else if (resp.rfind("OK IN=0x", 0) == 0) {
         unsigned int val = 0;

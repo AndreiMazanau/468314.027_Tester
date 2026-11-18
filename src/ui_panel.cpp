@@ -1,6 +1,7 @@
 #include "ui_panel.hpp"
 #include "imgui.h"
 #include "implot.h"
+#include <algorithm>
 #include <cstdio>
 
 UiPanel::UiPanel() {
@@ -22,28 +23,26 @@ void UiPanel::Render(BpoClient& client) {
     RenderConnectionBar(client, tel);
     ImGui::Separator();
 
-    // 3 колонки рабочего пространства
     float avail_w = ImGui::GetContentRegionAvail().x;
-    float col1_w = avail_w * 0.34f;
-    float col2_w = avail_w * 0.28f;
+    float col1_w = avail_w * 0.36f;
+    float col2_w = avail_w * 0.27f;
 
-    ImGui::BeginChild("ColMatrix", ImVec2(col1_w, -180.0f), true);
+    ImGui::BeginChild("ColMatrix", ImVec2(col1_w, -175.0f), true);
     RenderDisplayMatrixPanel(client, tel);
     ImGui::EndChild();
 
     ImGui::SameLine();
 
-    ImGui::BeginChild("ColOutputs", ImVec2(col2_w, -180.0f), true);
+    ImGui::BeginChild("ColOutputs", ImVec2(col2_w, -175.0f), true);
     RenderOutputsAndPeripheralsPanel(client, tel);
     ImGui::EndChild();
 
     ImGui::SameLine();
 
-    ImGui::BeginChild("ColTelemetry", ImVec2(0.0f, -180.0f), true);
+    ImGui::BeginChild("ColTelemetry", ImVec2(0.0f, -175.0f), true);
     RenderInputsAndTelemetryPanel(client, tel);
     ImGui::EndChild();
 
-    // Нижняя консоль UART
     ImGui::BeginChild("ConsolePane", ImVec2(0.0f, 0.0f), true);
     RenderConsoleLog(client);
     ImGui::EndChild();
@@ -112,18 +111,121 @@ void UiPanel::RenderConnectionBar(BpoClient& client, const BpoTelemetry& tel) {
     ImGui::Text("| MCU: %s", tel.fw_info.c_str());
 }
 
+// Отрисовка одного 7-сегментного разряда (A..G + DP) через ImDrawList
+static void DrawSevenSegmentDigit(ImDrawList* dl, ImVec2 pos, float w, float h, uint8_t mask, ImU32 col_on, ImU32 col_off) {
+    const float t = 5.0f;  // Толщина сегмента
+    const float g = 2.0f;  // Зазор между сегментами
+    const float half_h = h * 0.5f;
+
+    auto seg_col = [&](int bit) -> ImU32 {
+        return (mask & (1u << bit)) ? col_on : col_off;
+    };
+
+    // Горизонтальные сегменты: A (bit 0), G (bit 6), D (bit 3)
+    dl->AddRectFilled(ImVec2(pos.x + t + g, pos.y),
+                      ImVec2(pos.x + w - t - g, pos.y + t), seg_col(0), 2.0f);
+    dl->AddRectFilled(ImVec2(pos.x + t + g, pos.y + half_h - t * 0.5f),
+                      ImVec2(pos.x + w - t - g, pos.y + half_h + t * 0.5f), seg_col(6), 2.0f);
+    dl->AddRectFilled(ImVec2(pos.x + t + g, pos.y + h - t),
+                      ImVec2(pos.x + w - t - g, pos.y + h), seg_col(3), 2.0f);
+
+    // Верхние вертикальные: F (bit 5 - левый), B (bit 1 - правый)
+    dl->AddRectFilled(ImVec2(pos.x, pos.y + t + g),
+                      ImVec2(pos.x + t, pos.y + half_h - g), seg_col(5), 2.0f);
+    dl->AddRectFilled(ImVec2(pos.x + w - t, pos.y + t + g),
+                      ImVec2(pos.x + w, pos.y + half_h - g), seg_col(1), 2.0f);
+
+    // Нижние вертикальные: E (bit 4 - левый), C (bit 2 - правый)
+    dl->AddRectFilled(ImVec2(pos.x, pos.y + half_h + g),
+                      ImVec2(pos.x + t, pos.y + h - t - g), seg_col(4), 2.0f);
+    dl->AddRectFilled(ImVec2(pos.x + w - t, pos.y + half_h + g),
+                      ImVec2(pos.x + w, pos.y + h - t - g), seg_col(2), 2.0f);
+
+    // Десятичная точка DP (bit 7)
+    dl->AddCircleFilled(ImVec2(pos.x + w + 6.0f, pos.y + h - t * 0.6f), 3.2f, seg_col(7));
+}
+
+void UiPanel::RenderFrontPanelPreview(const BpoTelemetry& tel) {
+    ImGui::Text("Визуализация передней панели (COL1..3 = HG1..3, COL4..5 = LED):");
+
+    ImVec2 canvas_p0 = ImGui::GetCursorScreenPos();
+    float avail_w = ImGui::GetContentRegionAvail().x;
+    float canvas_h = 118.0f;
+    ImVec2 canvas_p1 = ImVec2(canvas_p0.x + avail_w, canvas_p0.y + canvas_h);
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(canvas_p0, canvas_p1, IM_COL32(22, 24, 28, 255), 6.0f);
+    dl->AddRect(canvas_p0, canvas_p1, IM_COL32(65, 70, 80, 255), 6.0f);
+
+    // Интенсивность свечения зависит от текущей настройки яркости (0..100%)
+    float br = std::clamp(static_cast<float>(tel.ui_brightness) / 100.0f, 0.15f, 1.0f);
+    ImU32 red_on   = IM_COL32(static_cast<int>(255 * br), static_cast<int>(45 * br), static_cast<int>(30 * br), 255);
+    ImU32 green_on = IM_COL32(static_cast<int>(45 * br), static_cast<int>(235 * br), static_cast<int>(85 * br), 255);
+    ImU32 seg_off  = IM_COL32(45, 48, 54, 255);
+
+    // 1. Три 7-сегментных индикатора HG1..HG3 (столбцы COL1..COL3)
+    float digit_w = 34.0f;
+    float digit_h = 64.0f;
+    float start_x = canvas_p0.x + 18.0f;
+    float start_y = canvas_p0.y + 26.0f;
+
+    for (int d = 0; d < 3; ++d) {
+        float dx = start_x + d * (digit_w + 22.0f);
+        char lbl[16];
+        std::snprintf(lbl, sizeof(lbl), "HG%d", d + 1);
+        dl->AddText(ImVec2(dx + 4.0f, canvas_p0.y + 6.0f), IM_COL32(150, 160, 175, 255), lbl);
+        DrawSevenSegmentDigit(dl, ImVec2(dx, start_y), digit_w, digit_h, tel.ui_cols[d], red_on, seg_off);
+    }
+
+    // Разделительная линия между индикаторами и мнемосхемой светодиодов
+    float sep_x = start_x + 3 * (digit_w + 22.0f) + 4.0f;
+    dl->AddLine(ImVec2(sep_x, canvas_p0.y + 10.0f), ImVec2(sep_x, canvas_p1.y - 10.0f), IM_COL32(55, 60, 68, 255));
+
+    // 2. Две группы по 8 единичных светодиодов (COL4 и COL5)
+    float led_start_x = sep_x + 16.0f;
+    for (int col_idx = 3; col_idx <= 4; ++col_idx) {
+        int group = col_idx - 3;
+        float row_y = canvas_p0.y + 28.0f + group * 46.0f;
+
+        char col_lbl[24];
+        std::snprintf(col_lbl, sizeof(col_lbl), "COL%d (0..7):", col_idx + 1);
+        dl->AddText(ImVec2(led_start_x, row_y - 16.0f), IM_COL32(150, 160, 175, 255), col_lbl);
+
+        for (int bit = 0; bit < 8; ++bit) {
+            float lx = led_start_x + 8.0f + bit * 22.0f;
+            float ly = row_y + 10.0f;
+            bool on = (tel.ui_cols[col_idx] & (1u << bit)) != 0;
+
+            if (on) {
+                // Легкий ореол вокруг горящего светодиода
+                dl->AddCircleFilled(ImVec2(lx, ly), 9.0f, IM_COL32(45, 235, 85, static_cast<int>(55 * br)));
+            }
+            dl->AddCircleFilled(ImVec2(lx, ly), 6.0f, on ? green_on : seg_off);
+            dl->AddCircle(ImVec2(lx, ly), 6.0f, IM_COL32(80, 86, 96, 255));
+
+            char bit_txt[4];
+            std::snprintf(bit_txt, sizeof(bit_txt), "%d", bit);
+            dl->AddText(ImVec2(lx - 3.0f, ly + 8.0f), IM_COL32(120, 128, 140, 255), bit_txt);
+        }
+    }
+
+    ImGui::Dummy(ImVec2(avail_w, canvas_h + 4.0f));
+}
+
 void UiPanel::RenderDisplayMatrixPanel(BpoClient& client, const BpoTelemetry& tel) {
     ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "МАТРИЦА ИНДИКАЦИИ (5x8)");
     ImGui::Separator();
 
+    // Визуальный рендер HG1..HG3 и LED (активен всегда, отражает текущие маски столбцов)
+    RenderFrontPanelPreview(tel);
+    ImGui::Separator();
+
     ImGui::BeginDisabled(!tel.test_mode);
 
-    // Быстрые кнопки управления всей матрицей
     if (ImGui::Button("ВСЕ ВКЛ (ALL)", ImVec2(120, 0))) client.SetUiAll(true);
     ImGui::SameLine();
     if (ImGui::Button("ВСЕ ВЫКЛ (OFF)", ImVec2(120, 0))) client.SetUiAll(false);
 
-    // Слайдер яркости
     int bright = tel.ui_brightness;
     ImGui::SetNextItemWidth(-1.0f);
     if (ImGui::SliderInt("##Bright", &bright, 0, 100, "Яркость матрицы: %d%%")) {
@@ -134,14 +236,11 @@ void UiPanel::RenderDisplayMatrixPanel(BpoClient& client, const BpoTelemetry& te
         }
     }
 
-    ImGui::Spacing();
-    ImGui::Text("Побитовое управление столбцами (клик по ячейке):");
-
     const char* seg_names[8] = {"Bit 0 (A)", "Bit 1 (B)", "Bit 2 (C)", "Bit 3 (D)",
                                 "Bit 4 (E)", "Bit 5 (F)", "Bit 6 (G)", "Bit 7 (DP)"};
 
     if (ImGui::BeginTable("MatrixTable", 6, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
-        ImGui::TableSetupColumn("Бит / Сегмент", ImGuiTableColumnFlags_WidthFixed, 95.0f);
+        ImGui::TableSetupColumn("Бит / Сегм.", ImGuiTableColumnFlags_WidthFixed, 88.0f);
         for (int c = 1; c <= 5; ++c) {
             char hdr[16];
             std::snprintf(hdr, sizeof(hdr), "COL %d", c);
@@ -168,7 +267,7 @@ void UiPanel::RenderDisplayMatrixPanel(BpoClient& client, const BpoTelemetry& te
 
                 char btn_id[32];
                 std::snprintf(btn_id, sizeof(btn_id), "%s##c%db%d", active ? "1" : "0", col, bit);
-                if (ImGui::Button(btn_id, ImVec2(-1.0f, 24.0f))) {
+                if (ImGui::Button(btn_id, ImVec2(-1.0f, 20.0f))) {
                     uint8_t new_mask = tel.ui_cols[col] ^ static_cast<uint8_t>(1u << bit);
                     client.SetColumnMask(col + 1, new_mask);
                 }
@@ -176,7 +275,6 @@ void UiPanel::RenderDisplayMatrixPanel(BpoClient& client, const BpoTelemetry& te
             }
         }
 
-        // Строка с HEX-масками и кнопками сброса столбца
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
         ImGui::TextDisabled("HEX маска");
@@ -185,7 +283,6 @@ void UiPanel::RenderDisplayMatrixPanel(BpoClient& client, const BpoTelemetry& te
             char hex_btn[24];
             std::snprintf(hex_btn, sizeof(hex_btn), "0x%02X##clr%d", tel.ui_cols[col], col);
             if (ImGui::Button(hex_btn, ImVec2(-1.0f, 0.0f))) {
-                // Клик по HEX-кнопке инвертирует столбец (0x00 <-> 0xFF)
                 client.SetColumnMask(col + 1, tel.ui_cols[col] == 0 ? 0xFF : 0x00);
             }
             if (ImGui::IsItemHovered()) {
@@ -203,7 +300,7 @@ void UiPanel::RenderOutputsAndPeripheralsPanel(BpoClient& client, const BpoTelem
     ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "ВЫХОДЫ КЛАПАНОВ И ПЕРИФЕРИЯ");
     ImGui::Separator();
 
-    bool emrg_active = ((tel.inputs_mask >> 8) & 1u) == 0; // Активный 0 на входе EMRG
+    bool emrg_active = ((tel.inputs_mask >> 8) & 1u) == 0;
     if (emrg_active && tel.connected) {
         ImGui::TextColored(ImVec4(1.0f, 0.25f, 0.25f, 1.0f), "ВНИМАНИЕ: СТОП (EMRG) АКТИВЕН!");
     }
@@ -240,7 +337,19 @@ void UiPanel::RenderOutputsAndPeripheralsPanel(BpoClient& client, const BpoTelem
 
     if (ImGui::Button("Зуммер 1x (BUZZ)", ImVec2(-1.0f, 0.0f))) client.SendCommand("SET_UI BUZZ");
     if (ImGui::Button("Зуммер 2x (BUZZ2)", ImVec2(-1.0f, 0.0f))) client.SendCommand("SET_UI BUZZ2");
-    if (ImGui::Button("Подсветка кнопок 50%", ImVec2(-1.0f, 0.0f))) client.SendCommand("SET_UI LIGHT");
+    //if (ImGui::Button("Подсветка кнопок 50%", ImVec2(-1.0f, 0.0f))) client.SendCommand("SET_UI LIGHT");
+    int light_pct = tel.ui_light_pct;
+    ImGui::SetNextItemWidth(-70.0f);
+    if (ImGui::SliderInt("##KeyLight", &light_pct, 0, 100, "Подсветка кнопок: %d%%")) {
+        if (now - last_light_send_time_ > 0.03f || light_pct == 0 || light_pct == 100) {
+            client.SetKeyBacklight(static_cast<uint8_t>(light_pct));
+            last_light_send_time_ = now;
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Выкл##light_off", ImVec2(-1.0f, 0.0f))) {
+        client.SetKeyBacklight(0);
+    }
 
     ImGui::EndDisabled();
 
@@ -269,37 +378,50 @@ void UiPanel::RenderInputsAndTelemetryPanel(BpoClient& client, const BpoTelemetr
         bool high = ((tel.inputs_mask >> i) & 1u) != 0;
         ImVec4 col = high ? ImVec4(0.2f, 0.75f, 0.35f, 1.0f) : ImVec4(0.25f, 0.25f, 0.28f, 1.0f);
         ImGui::PushStyleColor(ImGuiCol_Button, col);
-        ImGui::Button(in_names[i], ImVec2(54.0f, 26.0f));
+        ImGui::Button(in_names[i], ImVec2(52.0f, 24.0f));
         ImGui::PopStyleColor();
     }
 
     ImGui::Spacing();
     ImGui::Separator();
 
-    // 2. ШИМ входы джойстика
-    ImGui::Text("ШИМ джойстика (TIM1 CH1..4):");
-    if (ImGui::BeginTable("PwmTable", 3, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg)) {
-        ImGui::TableSetupColumn("Канал");
-        ImGui::TableSetupColumn("Частота (Гц)");
-        ImGui::TableSetupColumn("Скважность (%)");
-        ImGui::TableHeadersRow();
+    // 2. Таблица и график ШИМ джойстика (TIM1 CH1..4)
+    ImGui::Text("ШИМ джойстика: [1] %uГц/%.1f%%  [2] %uГц/%.1f%%  [3] %uГц/%.1f%%  [4] %uГц/%.1f%%",
+                tel.pwm[0].freq_hz, tel.pwm[0].duty_pct,
+                tel.pwm[1].freq_hz, tel.pwm[1].duty_pct,
+                tel.pwm[2].freq_hz, tel.pwm[2].duty_pct,
+                tel.pwm[3].freq_hz, tel.pwm[3].duty_pct);
+
+    float avail_h = ImGui::GetContentRegionAvail().y;
+    float plot_h = std::max(110.0f, (avail_h - 32.0f) * 0.5f);
+
+    std::lock_guard<std::mutex> lk(client.data_mutex);
+
+    if (ImPlot::BeginPlot("Скважность ШИМ джойстика (PWM 1..4)", ImVec2(-1.0f, plot_h), ImPlotFlags_NoMenus)) {
+        ImPlot::SetupAxes("Время (с)", "Скважность (%)", ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_None);
+        ImPlot::SetupAxisLimits(ImAxis_Y1, -5.0, 105.0, ImGuiCond_Once);
+        ImPlot::SetupLegend(ImPlotLocation_NorthWest, ImPlotLegendFlags_Horizontal);
+
+        const char* pwm_labels[4] = {"PWM 1", "PWM 2", "PWM 3", "PWM 4"};
         for (int i = 0; i < 4; ++i) {
-            ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0); ImGui::Text("PWM %d", i + 1);
-            ImGui::TableSetColumnIndex(1); ImGui::Text("%u Гц", tel.pwm[i].freq_hz);
-            ImGui::TableSetColumnIndex(2); ImGui::Text("%.1f %%", tel.pwm[i].duty_pct);
+            if (!client.hist_pwm_duty[i].x.empty()) {
+                ImPlot::PlotLine(pwm_labels[i],
+                                 client.hist_pwm_duty[i].x.data(),
+                                 client.hist_pwm_duty[i].y.data(),
+                                 static_cast<int>(client.hist_pwm_duty[i].x.size()),
+                                 0,
+                                 client.hist_pwm_duty[i].offset);
+            }
         }
-        ImGui::EndTable();
+        ImPlot::EndPlot();
     }
 
     // 3. График АЦП в реальном времени (ImPlot)
-    ImGui::Spacing();
     ImGui::Text("АЦП: AIN1 = %u | ESEN = %u", tel.adc_ain1, tel.adc_esen);
-
-    std::lock_guard<std::mutex> lk(client.data_mutex);
     if (ImPlot::BeginPlot("ADC1 (AIN1 / ESEN)", ImVec2(-1.0f, -1.0f), ImPlotFlags_NoMenus)) {
         ImPlot::SetupAxes("Время (с)", "RAW (0..4095)", ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_None);
         ImPlot::SetupAxisLimits(ImAxis_Y1, 0.0, 4150.0, ImGuiCond_Once);
+        ImPlot::SetupLegend(ImPlotLocation_NorthWest, ImPlotLegendFlags_Horizontal);
 
         if (!client.hist_ain1.x.empty()) {
             ImPlot::PlotLine("AIN1", client.hist_ain1.x.data(), client.hist_ain1.y.data(),

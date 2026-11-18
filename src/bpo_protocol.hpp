@@ -19,6 +19,7 @@ struct BpoTelemetry {
     std::string fw_info = "—";
     std::string flash_status = "Не проверено";
     bool flash_ok = false;
+    uint8_t ui_light_pct = 0;
 
     uint16_t inputs_mask = 0; // Биты 0..7: KB1..KB8, бит 8: EMRG, бит 9: SG
     std::array<PwmChannelData, 4> pwm{};
@@ -76,6 +77,7 @@ public:
     void SetUiAll(bool on);
     void SetUiBrightness(uint8_t pct);
     void SetValveOutput(int ch_1_to_4, uint8_t pct);
+    void SetKeyBacklight(uint8_t pct);
 
     BpoTelemetry GetTelemetry();
     std::vector<std::string> GetLogLines();
