@@ -1,0 +1,43 @@
+# Каталоги сборки CMake / Ninja и кэш FetchContent
+build/
+build-*/
+cmake-build-*/
+_deps/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+Makefile
+*.ninja
+.ninja_deps
+.ninja_log
+
+# Кэш clangd и VS Code
+.cache/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# Скомпилированные бинарники и объектные файлы
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dylib
+*.dll
+*.exe
+*.app/
+*.dSYM/
+
+# Логи и временные файлы ОС / редакторов
+*.log
+*.tmp
+*.swp
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+imgui.ini
